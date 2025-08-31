@@ -22,19 +22,57 @@ def obtain_chat_model():
     llm = init_chat_model("gpt-4o-mini", model_provider="openai")
     return llm
 
-def define_map_prompt():
+def define_map_prompt(level: str):
+    if (level == "expert"):
+        system_msg = (
+            "Imagine the reader is a lawyer or a paralegal."
+            "Write a detailed summary of the following legal text. "
+            "Focus on precise legal terminology, case references, and nuanced interpretations."
+        )
+    elif (level == "moderate"):
+        system_msg = (
+            "Imagine the reader is not an expert, but also not a complete layman."
+            "Summarize the following legal text for someone with basic legal knowledge. "
+            "Explain the main points clearly without excessive jargon, but preserve key legal concepts."
+        )
+    else:  # beginner
+        system_msg = (
+            "Explain the following legal text in very simple terms, "
+            "as if to someone without legal training. Focus only on the main ideas."
+        )
     map_prompt = ChatPromptTemplate.from_messages(
-        [("system", "Write a concise summary of the following:\\n\\n{context}")]
+        [("system", system_msg + "\\n\\n{context}")]
     )
     return map_prompt
 
-def reduce():
+def reduce(level: str):
     reduce_template = """
     The following is a set of summaries:
     {docs}
     Take these and distill it into a final, consolidated summary
     of the main themes.
     """
+    if (level == "expert"):
+        reduce_template = """
+        The following are section summaries:
+        {docs}
+        Consolidate them into a rigorous legal summary, 
+        highlighting legal arguments, precedents, and implications.
+        """
+    elif (level == "moderate"):
+        reduce_template = """
+        The following are section summaries:
+        {docs}
+        Consolidate them into a clear summary for someone with basic legal knowledge.
+        Focus on the main points and legal reasoning without too much jargon.
+        """
+    else:  # beginner
+        reduce_template = """
+        The following are section summaries:
+        {docs}
+        Explain them in plain language for a non-lawyer.
+        Keep it simple and focus on the overall meaning.
+        """
 
     reduce_prompt = ChatPromptTemplate([("human", reduce_template)])
     return reduce_prompt
@@ -61,8 +99,8 @@ class OverallState(TypedDict):
 class SummaryState(TypedDict):
     content: str
 
-async def generate_summary(state: SummaryState):
-    map_prompt = define_map_prompt()
+async def generate_summary(state: SummaryState, level: str):
+    map_prompt = define_map_prompt(level)
     llm = obtain_chat_model()
     prompt = map_prompt.invoke(state["content"])
     response = await llm.ainvoke(prompt)
@@ -78,8 +116,8 @@ def collect_summaries(state: OverallState):
         "collapsed_summaries": [Document(summary) for summary in state["summaries"]]
     }
 
-async def _reduce(input: dict) -> str:
-    reduce_prompt = reduce()
+async def _reduce(input: dict, level: str) -> str:
+    reduce_prompt = reduce(level)
     llm = obtain_chat_model()
     prompt = reduce_prompt.invoke(input)
     response = await llm.ainvoke(prompt)
@@ -104,16 +142,16 @@ def should_collapse(
     else:
         return "generate_final_summary"
     
-async def generate_final_summary(state: OverallState):
-    response = await _reduce(state["collapsed_summaries"])
+async def generate_final_summary(state: OverallState, level):
+    response = await _reduce(state["collapsed_summaries"], level)
     return {"final_summary": response}
 
-def construct_graph():
+def construct_graph(level: str):
     graph = StateGraph(OverallState)
-    graph.add_node("generate_summary", generate_summary)
+    graph.add_node("generate_summary", lambda s: generate_summary(s, level))
     graph.add_node("collect_summaries", collect_summaries)
     graph.add_node("collapse_summaries", collapse_summaries)
-    graph.add_node("generate_final_summary", generate_final_summary)
+    graph.add_node("generate_final_summary", lambda s: generate_final_summary(s, level))
 
     graph.add_conditional_edges(START, map_summaries, ["generate_summary"])
     graph.add_edge("generate_summary", "collect_summaries")
@@ -124,13 +162,14 @@ def construct_graph():
     app = graph.compile()
     return app
 
-async def final_summary(file_path):
-    app = construct_graph()
+async def final_summary(file_path, level: str = "beginner"):
+    app = construct_graph(level)
     loader = PyPDFLoader(file_path)
     pages = []
     async for page in loader.alazy_load():
         pages.append(page)
     split_docs = splitting(pages)
+    result = None
     async for step in app.astream(
         {"contents": [doc.page_content for doc in split_docs]},
         {"recursion_limit": 10},
