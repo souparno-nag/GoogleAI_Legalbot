@@ -46,12 +46,12 @@ def define_map_prompt(level: str):
     return map_prompt
 
 def reduce(level: str):
-    reduce_template = """
-    The following is a set of summaries:
-    {docs}
-    Take these and distill it into a final, consolidated summary
-    of the main themes.
-    """
+    # reduce_template = """
+    # The following is a set of summaries:
+    # {docs}
+    # Take these and distill it into a final, consolidated summary
+    # of the main themes.
+    # """
     if (level == "expert"):
         reduce_template = """
         The following are section summaries:
