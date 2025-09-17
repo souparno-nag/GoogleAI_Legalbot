@@ -195,6 +195,6 @@ async def final_summary(file_path, level: str = "beginner"):
     return result
 
 
-if __name__ == "__main__":
-    result = asyncio.run(final_summary("../Hostel_Affidavit_Men_2024-Chennai_Updated.pdf"))
-    print(result)
+# if __name__ == "__main__":
+#     result = asyncio.run(final_summary("../Hostel_Affidavit_Men_2024-Chennai_Updated.pdf"))
+#     print(result)
