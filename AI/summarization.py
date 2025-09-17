@@ -1,5 +1,6 @@
 import getpass
 import os
+from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import CharacterTextSplitter
@@ -10,16 +11,19 @@ from langchain.chains.combine_documents.reduce import (
     split_list_of_docs,
 )
 from langchain_core.documents import Document
-from langgraph.constants import Send
+from langgraph.types import Send
 from langgraph.graph import END, START, StateGraph
 from langchain_community.document_loaders import PyPDFLoader
+import asyncio
+import functools
 
 token_max = 1000
+load_dotenv()
 
 def obtain_chat_model():
-    if not os.environ.get("OPENAI_API_KEY"):
-        os.environ["OPENAI_API_KEY"] = getpass.getpass("Enter API key for OpenAI: ")
-    llm = init_chat_model("gpt-4o-mini", model_provider="openai")
+    if "GOOGLE_API_KEY" not in os.environ:
+        os.environ["GOOGLE_API_KEY"] = getpass.getpass("Enter your Google AI API key: ")
+    llm = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
     return llm
 
 def define_map_prompt(level: str):
@@ -102,7 +106,7 @@ class SummaryState(TypedDict):
 async def generate_summary(state: SummaryState, level: str):
     map_prompt = define_map_prompt(level)
     llm = obtain_chat_model()
-    prompt = map_prompt.invoke(state["content"])
+    prompt = map_prompt.format(context=state["content"])
     response = await llm.ainvoke(prompt)
     return {"summaries": [response.content]}
 
@@ -119,7 +123,17 @@ def collect_summaries(state: OverallState):
 async def _reduce(input: dict, level: str) -> str:
     reduce_prompt = reduce(level)
     llm = obtain_chat_model()
-    prompt = reduce_prompt.invoke(input)
+
+    # Convert Document objects into plain text before formatting
+    if isinstance(input, dict) and "collapsed_summaries" in input:
+        docs_text = "\n\n".join(doc.page_content for doc in input["collapsed_summaries"])
+    elif isinstance(input, list):  # sometimes it's already a list of Document
+        docs_text = "\n\n".join(doc.page_content for doc in input)
+    else:
+        docs_text = str(input)
+
+    prompt = reduce_prompt.format(docs=docs_text)
+    print("DEBUG FINAL PROMPT >>>", prompt[:500])
     response = await llm.ainvoke(prompt)
     return response.content
 
@@ -143,15 +157,15 @@ def should_collapse(
         return "generate_final_summary"
     
 async def generate_final_summary(state: OverallState, level):
-    response = await _reduce(state["collapsed_summaries"], level)
+    response = await _reduce({"collapsed_summaries": state["collapsed_summaries"]}, level)
     return {"final_summary": response}
 
 def construct_graph(level: str):
     graph = StateGraph(OverallState)
-    graph.add_node("generate_summary", lambda s: generate_summary(s, level))
+    graph.add_node("generate_summary", functools.partial(generate_summary, level=level))
     graph.add_node("collect_summaries", collect_summaries)
     graph.add_node("collapse_summaries", collapse_summaries)
-    graph.add_node("generate_final_summary", lambda s: generate_final_summary(s, level))
+    graph.add_node("generate_final_summary", functools.partial(generate_final_summary, level=level))
 
     graph.add_conditional_edges(START, map_summaries, ["generate_summary"])
     graph.add_edge("generate_summary", "collect_summaries")
@@ -169,9 +183,18 @@ async def final_summary(file_path, level: str = "beginner"):
     async for page in loader.alazy_load():
         pages.append(page)
     split_docs = splitting(pages)
+    for i, doc in enumerate(split_docs):
+        print(f"DOC {i} >>>", doc.page_content[:300])
+        if not any(doc.page_content.strip() for doc in split_docs):
+            raise ValueError("PDF contained no extractable text")
     result = None
     async for step in app.astream(
         {"contents": [doc.page_content for doc in split_docs]},
         {"recursion_limit": 10},
     ): result = step
     return result
+
+
+if __name__ == "__main__":
+    result = asyncio.run(final_summary("../Hostel_Affidavit_Men_2024-Chennai_Updated.pdf"))
+    print(result)
