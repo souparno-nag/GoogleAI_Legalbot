@@ -11,21 +11,34 @@ from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import END
 from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.messages import AIMessage, HumanMessage
+from dotenv import load_dotenv
+import asyncio
+
+load_dotenv()
+VECTOR_STORE = None
 
 def obtain_chat_model():
-    if not os.environ.get("OPENAI_API_KEY"):
-        os.environ["OPENAI_API_KEY"] = getpass.getpass("Enter API key for OpenAI: ")
-    llm = init_chat_model("gpt-4o-mini", model_provider="openai")
+    if not os.environ.get("GOOGLE_API_KEY"):
+        os.environ["GOOGLE_API_KEY"] = getpass.getpass("Enter API key for OpenAI: ")
+    llm = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
     return llm
 
 def embedding_model():
     embeddings = OllamaEmbeddings(model="nomic-embed-text:v1.5")
     return embeddings
 
-def vector_store():
-    embeddings = embedding_model()
-    vector_store = InMemoryVectorStore(embeddings)
-    return vector_store
+def init_vector_store():
+    global VECTOR_STORE
+    if VECTOR_STORE is None:
+        embeddings = embedding_model()
+        VECTOR_STORE = InMemoryVectorStore(embeddings)
+    return VECTOR_STORE
+
+# def vector_store():
+#     embeddings = embedding_model()
+#     vs = InMemoryVectorStore(embeddings)
+#     return vs
 
 async def obtain_docs(file_path):
     loader = PyPDFLoader(file_path)
@@ -42,13 +55,15 @@ async def splitting(file_path):
 
 async def store_to_vectorDB(file_path):
     all_splits = await splitting(file_path)
-    document_ids = vector_store.add_documents(documents=all_splits)
-    return
+    vs = init_vector_store()
+    vs.add_documents(documents=all_splits)
+    return 
 
 @tool(response_format="content_and_artifact")
 def retrieve(query: str):
     """Retrieve information related to a query."""
-    retrieved_docs = vector_store.similarity_search(query, k=2)
+    vs = init_vector_store()
+    retrieved_docs = vs.similarity_search(query, k=2)
     serialized = "\n\n".join(
         (f"Source: {doc.metadata}\nContent: {doc.page_content}")
         for doc in retrieved_docs
@@ -62,6 +77,7 @@ def query_or_respond(state: MessagesState):
     response = llm_with_tools.invoke(state["messages"])
     # MessagesState appends messages to state instead of overwriting
     return {"messages": [response]}
+    # return {"messages": [AIMessage(content=response.content)]}
 
 def tools():
     return ToolNode([retrieve])
@@ -79,7 +95,8 @@ def generate(state: MessagesState):
     tool_messages = recent_tool_messages[::-1]
 
     # Format into prompt
-    docs_content = "\n\n".join(doc.content for doc in tool_messages)
+    # docs_content = "\n\n".join(doc.content for doc in tool_messages)
+    docs_content = "\n\n".join(str(msg.content) for msg in tool_messages)
     system_message_content = (
         "You are an assistant for question-answering tasks. "
         "Use the following pieces of retrieved context to answer "
@@ -126,13 +143,19 @@ class Chatbot:
 
     async def ask(self, user_input: str) -> str:
         """Send a message to the chatbot and get response."""
-        self.state["messages"].append({"role": "user", "content": user_input})
+        # self.state["messages"].append({"role": "user", "content": user_input})
+        self.state["messages"].append(HumanMessage(content=user_input))
         async for step in self.graph.astream(self.state, stream_mode="values"):
-            pass  # we just iterate to final state
-        response = self.state["messages"][-1].content
-        return response
+            self.state = step
+        # response = self.state["messages"][-1]["content"]
+        # return response
+        # Find the last AI message
+        for msg in reversed(self.state["messages"]):
+            if isinstance(msg, AIMessage):
+                return msg.content
+        return "Sorry, I couldn't generate a response."
     
-async def main(file_path):
+async def main(file_path: str = "../Hostel_Affidavit_Men_2024-Chennai_Updated.pdf"):
     global GRAPH
     await store_to_vectorDB(file_path)
     GRAPH = define_graph()
@@ -146,3 +169,5 @@ async def main(file_path):
             break
         answer = await bot.ask(user_in)
         print("Bot:", answer)
+
+asyncio.run(main())
