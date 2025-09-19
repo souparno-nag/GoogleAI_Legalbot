@@ -79,8 +79,9 @@ def query_or_respond(state: MessagesState):
     return {"messages": [response]}
     # return {"messages": [AIMessage(content=response.content)]}
 
-def tools():
-    return ToolNode([retrieve])
+def tools(state: MessagesState):
+    node =  ToolNode([retrieve])
+    return node(state)
 
 def generate(state: MessagesState):
     """Generate answer."""
@@ -121,7 +122,8 @@ def generate(state: MessagesState):
 def define_graph():
     graph_builder = StateGraph(MessagesState)
     graph_builder.add_node(query_or_respond)
-    graph_builder.add_node(tools)
+    # graph_builder.add_node(tools)
+    graph_builder.add_node(ToolNode([retrieve]), name="tools")
     graph_builder.add_node(generate)
 
     graph_builder.set_entry_point("query_or_respond")
