@@ -17,6 +17,14 @@ from langchain_community.document_loaders import PyPDFLoader
 import asyncio
 import functools
 
+import logging
+import os
+
+# Suppress gRPC ALTS warnings
+os.environ["GRPC_VERBOSITY"] = "NONE"
+os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
+logging.getLogger("grpc").setLevel(logging.ERROR)
+
 token_max = 1000
 load_dotenv()
 
@@ -78,7 +86,7 @@ def reduce(level: str):
         Keep it simple and focus on the overall meaning.
         """
 
-    reduce_prompt = ChatPromptTemplate([("human", reduce_template)])
+    reduce_prompt = ChatPromptTemplate.from_messages([("human", reduce_template)])
     return reduce_prompt
 
 def splitting(docs):
@@ -86,7 +94,7 @@ def splitting(docs):
         chunk_size=1000, chunk_overlap=0
     )
     split_docs = text_splitter.split_documents(docs)
-    print(f"Generated {len(split_docs)} documents.")
+    # print(f"Generated {len(split_docs)} documents.")
     return split_docs
 
 def length_function(documents: List[Document]) -> int:
@@ -104,6 +112,7 @@ class SummaryState(TypedDict):
     content: str
 
 async def generate_summary(state: SummaryState, level: str):
+    # print(f"[DEBUG] Generating summary at level {level} for content length {len(state['content'])}...")
     map_prompt = define_map_prompt(level)
     llm = obtain_chat_model()
     prompt = map_prompt.format(context=state["content"])
@@ -117,7 +126,7 @@ def map_summaries(state: OverallState):
 
 def collect_summaries(state: OverallState):
     return {
-        "collapsed_summaries": [Document(summary) for summary in state["summaries"]]
+        "collapsed_summaries": [Document(page_content=summary) for summary in state["summaries"]]
     }
 
 async def _reduce(input: dict, level: str) -> str:
@@ -133,18 +142,25 @@ async def _reduce(input: dict, level: str) -> str:
         docs_text = str(input)
 
     prompt = reduce_prompt.format(docs=docs_text)
-    print("DEBUG FINAL PROMPT >>>", prompt[:500])
+    # print("DEBUG FINAL PROMPT >>>", prompt[:500])
     response = await llm.ainvoke(prompt)
+    # print(f"[DEBUG] Finished reduction at level {level}.")
     return response.content
 
-async def collapse_summaries(state: OverallState):
+async def collapse_summaries(state: OverallState, level: str):
     doc_lists = split_list_of_docs(
         state["collapsed_summaries"], length_function, token_max
     )
     results = []
-    for doc_list in doc_lists:
-        results.append(await acollapse_docs(doc_list, _reduce))
+    # for doc_list in doc_lists:
+    #     results.append(await acollapse_docs(doc_list, _reduce))
+    # Bind level into _reduce using functools.partial
+    reducer = functools.partial(_reduce, level=level)
 
+    for doc_list in doc_lists:
+        results.append(await acollapse_docs(doc_list, reducer))
+
+    # print(f"[DEBUG] Completed collapsing at level {level}, produced {len(results)} summaries.")
     return {"collapsed_summaries": results}
 
 def should_collapse(
@@ -164,7 +180,7 @@ def construct_graph(level: str):
     graph = StateGraph(OverallState)
     graph.add_node("generate_summary", functools.partial(generate_summary, level=level))
     graph.add_node("collect_summaries", collect_summaries)
-    graph.add_node("collapse_summaries", collapse_summaries)
+    graph.add_node("collapse_summaries", functools.partial(collapse_summaries, level=level))
     graph.add_node("generate_final_summary", functools.partial(generate_final_summary, level=level))
 
     graph.add_conditional_edges(START, map_summaries, ["generate_summary"])
@@ -176,25 +192,49 @@ def construct_graph(level: str):
     app = graph.compile()
     return app
 
+# async def final_summary(file_path, level: str = "beginner"):
+#     app = construct_graph(level)
+#     loader = PyPDFLoader(file_path)
+#     pages = []
+#     async for page in loader.alazy_load():
+#         pages.append(page)
+#     split_docs = splitting(pages)
+#     for i, doc in enumerate(split_docs):
+#         print(f"DOC {i} >>>", doc.page_content[:300])
+#         if not any(doc.page_content.strip() for doc in split_docs):
+#             raise ValueError("PDF contained no extractable text")
+#     result = None
+#     async for step in app.astream(
+#         {"contents": [doc.page_content for doc in split_docs]},
+#         {"recursion_limit": 10},
+#     ): result = step
+#     return result.get("final_summary") if result else None
+
 async def final_summary(file_path, level: str = "beginner"):
     app = construct_graph(level)
     loader = PyPDFLoader(file_path)
     pages = []
     async for page in loader.alazy_load():
         pages.append(page)
+
     split_docs = splitting(pages)
-    for i, doc in enumerate(split_docs):
-        print(f"DOC {i} >>>", doc.page_content[:300])
-        if not any(doc.page_content.strip() for doc in split_docs):
-            raise ValueError("PDF contained no extractable text")
-    result = None
+    if not any(doc.page_content.strip() for doc in split_docs):
+        raise ValueError("PDF contained no extractable text")
+
+    final_result = None
     async for step in app.astream(
         {"contents": [doc.page_content for doc in split_docs]},
         {"recursion_limit": 10},
-    ): result = step
-    return result
+    ):
+        # print(f"[STEP DEBUG] {step.keys()}")
+
+        # Capture final summary properly
+        if "generate_final_summary" in step:
+            final_result = step["generate_final_summary"].get("final_summary")
+
+    return final_result
 
 
 if __name__ == "__main__":
-    result = asyncio.run(final_summary("../Hostel_Affidavit_Men_2024-Chennai_Updated.pdf"))
+    result = asyncio.run(final_summary("../Git Cheatsheet.pdf"))
     print(result)
