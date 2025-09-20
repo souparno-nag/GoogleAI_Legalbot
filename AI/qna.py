@@ -25,7 +25,7 @@ def obtain_chat_model():
     return llm
 
 def embedding_model():
-    embeddings = OllamaEmbeddings(model="nomic-embed-text:v1.5")
+    embeddings = OllamaEmbeddings(model="nomic-embed-text:latest")
     return embeddings
 
 def init_vector_store():

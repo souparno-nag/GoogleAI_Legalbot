@@ -1,7 +1,7 @@
-import asyncio
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from summarization import final_summary
+
 
 app = FastAPI()
 
@@ -14,19 +14,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Dummy summarization result (replace with your generated JSON later)
-# summary_result = {
-#     "title": "Hostel Affidavit Summary",
-#     "key_points": [
-#         "This document outlines hostel rules for male students.",
-#         "Students must follow curfew regulations.",
-#         "Parents/guardians are required to sign the affidavit."
-#     ],
-#     "risk_level": "Medium"
-# }
 
-@app.get("/summarize")
-async def get_summary():
-    summary_result = await final_summary("../Hostel_Affidavit_Men_2024-Chennai_Updated.pdf")
+@app.post("/summarize")
+async def get_summary(file: UploadFile = File(...)):
+    contents = await file.read()
+
+    with open("uploaded.pdf", "wb") as f:
+        f.write(contents)
+
+    summary_result = await final_summary("uploaded.pdf")
     return summary_result
 
