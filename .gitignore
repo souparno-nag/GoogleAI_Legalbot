@@ -7,3 +7,4 @@ RAG_tutorial2.ipynb
 Summarization.ipynb
 .venv
 *.pdf
+/AI/__pycache__/

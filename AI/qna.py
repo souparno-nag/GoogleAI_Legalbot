@@ -172,4 +172,14 @@ async def main(file_path: str = "../Hostel_Affidavit_Men_2024-Chennai_Updated.pd
         answer = await bot.ask(user_in)
         print("Bot:", answer)
 
-asyncio.run(main())
+# asyncio.run(main())
+
+GRAPH = None
+BOT = None
+
+async def init_chat(file_path: str):
+    global GRAPH, BOT
+    await store_to_vectorDB(file_path)
+    GRAPH = define_graph()
+    BOT = Chatbot(GRAPH)
+    return BOT, GRAPH
