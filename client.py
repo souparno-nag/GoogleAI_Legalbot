@@ -1,10 +1,10 @@
 import requests
 
-# with open("Hostel_Affidavit_Men_2024-Chennai_Updated.pdf", "rb") as f:
-#     files = {"file": f}
-#     response = requests.post("http://localhost:8000/summarize", files=files)
+with open("Hostel_Affidavit_Men_2024-Chennai_Updated.pdf", "rb") as f:
+    files = {"file": f}
+    response = requests.post("http://localhost:8000/summarize", files=files)
 
-# print(response.json())
+print(response.json())
 # Replace with your question
 question_text = "exit"
 
